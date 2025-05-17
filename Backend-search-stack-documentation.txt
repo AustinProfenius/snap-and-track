@@ -1,0 +1,176 @@
+# Nutrition‑Search Backend – Setup & Usage Guide
+
+---
+
+## 1. High‑Level Architecture
+
+| Layer              | Technology                                               | Purpose                                                                                                                   |
+| ------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Data Warehouse** | **PostgreSQL 15 (Homebrew)**                             | Canonical Nutrition table (`foods`) with full macro & micro nutrients. Trigram index (`pg_trgm`) for in‑DB fuzzy queries. |
+| **Search Index**   | **Typesense 0.25 (Docker)**                              | Millisecond typo‑tolerant auto‑complete. Stores lean 7‑field projection of the `foods` catalog.                           |
+| **API Gateway**    | **FastAPI + Uvicorn**                                    | `/foods/search` endpoint: fuzzy search via Typesense → merge full nutrient row from Postgres → JSON to mobile client.     |
+| **Dev Ops**        | **Docker Desktop**, **pgAdmin 4**, local **Python venv** | One‑command Typesense container, Postgres GUI, repeatable importer scripts.                                               |
+
+```mermaid
+sequenceDiagram
+    Client ->> FastAPI: GET /foods/search?q=spagheti sqush
+    FastAPI ->> Typesense: fuzzy search (limit 20)
+    Typesense -->> FastAPI: [ {food_id, kcal, ...} ]
+    FastAPI ->> PostgreSQL: SELECT * FROM foods WHERE food_id IN (...)
+    PostgreSQL -->> FastAPI: full macro/micro rows
+    FastAPI -->> Client: merged JSON
+```
+
+---
+
+## 2. Data Flow & One‑Time Setup
+
+### 2.1 Flatten USDA JSON → CSV
+
+```bash
+jq -c '.[]' foods.json > foods.ndjson
+python flatten_foods.py   # outputs foods_flat.csv (~600 MB)
+```
+
+* `flatten_foods.py` keeps macros, micros & serving\_desc.
+
+### 2.2 PostgreSQL
+
+```bash
+# create and enter db
+createdb nutrition
+psql -d nutrition -c "CREATE EXTENSION pg_trgm;"
+# create foods schema (see create_foods_table.sql)
+\copy foods FROM 'foods_flat.csv' WITH (FORMAT csv, HEADER true)
+CREATE INDEX foods_name_trgm ON foods USING GIN (food_name gin_trgm_ops);
+```
+
+### 2.3 Typesense (Docker)
+
+```bash
+docker run -d --name typesense-dev \
+  -p 8108:8108 -e TYPESENSE_API_KEY=xyz typesense/typesense:0.25.2
+```
+
+*Lean schema*:
+
+```json
+{"name":"foods","fields":[
+ {"name":"food_id","type":"int32"},
+ {"name":"food_name","type":"string"},
+ {"name":"slug","type":"string"},
+ {"name":"kcal","type":"float"},
+ {"name":"protein_g","type":"float"},
+ {"name":"fat_g","type":"float"},
+ {"name":"carb_g","type":"float"}],
+ "default_sorting_field":"kcal"}
+```
+
+### 2.4 CSV → Typesense Import
+
+```bash
+python import_foods_to_typesense.py  # 1 M docs, 0 errors
+```
+
+Key points in *clean()*:
+
+```python
+KEEP = {...}
+out["id"] = str(out["food_id"])  # mandatory
+```
+
+### 2.5 FastAPI Gateway
+
+* `.env`
+
+  ```dotenv
+  TS_HOST=localhost
+  TS_PORT=8108
+  TS_API_KEY=xyz
+  PG_DSN=postgresql://austinprofenius@localhost:5432/nutrition
+  ```
+* `main.py` merges Typesense hits with Postgres row via `food_id`.
+* Run: `uvicorn main:app --reload --port 8000`
+
+---
+
+## 3. Daily Developer Commands
+
+| Task            | Command                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| Start Typesense | `docker start typesense-dev`                                        |
+| Stop Typesense  | `docker stop typesense-dev`                                         |
+| Start API       | `uvicorn main:app --reload --port 8000`                             |
+| Re‑import CSV   | `python import_foods_to_typesense.py`                               |
+| Fuzzy SQL test  | `SELECT food_name FROM foods WHERE food_name % 'spaghetti squash';` |
+
+---
+
+## 4. API Usage Examples
+
+### 4.1 Search (fuzzy, 2 typos)
+
+```http
+GET /foods/search?q=spaghetti+squash&limit=5
+```
+
+Response (abridged):
+
+```json
+[
+  {
+    "food_id": 1605880,
+    "food_name": "SPAGHETTI SQUASH",
+    "serving_desc": "1 cup (155 g)",
+    "kcal": 42,
+    "protein_g": 1,
+    "fat_g": 0.7,
+    "carb_g": 10,
+    "fiber_g": 2,
+    "sodium_mg": 24.8,
+    "vitamin_c_mg": 5.43,
+    ...
+  }
+]
+```
+
+*Guaranteed fields*: all columns from Postgres `foods` table + `id`, `slug`.
+
+---
+
+## 5. Troubleshooting Cheatsheet
+
+| Symptom                               | Likely Cause                  | Fix                                                                           |
+| ------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------- |
+| `database "..." does not exist`       | DSN dbname mismatch / quoting | Use lowercase db or rename: `ALTER DATABASE "Nutrition" RENAME TO nutrition;` |
+| Typesense import `0 ok, 15000 errors` | Missing `id` or unknown field | Ensure `clean()` sets `id` and `KEEP` matches schema                          |
+| API 500                               | Postgres row missing          | Confirm `food_id` exists in `foods`, add error guard                          |
+
+---
+
+## 6. Next Steps
+
+1. **Authentication & Permissions**
+   *Integrate JWT; protect `/foods/*` endpoints.*
+2. **Exercise Catalog**
+   *Repeat the CSV → Postgres → Typesense flow for `exercises`.*
+3. **Offline Bundle**
+   *Export top 1 000 foods to SQLite; query local first in mobile app.*
+4. **Deploy**
+   *Docker Compose (Typesense + API) → Fly.io / Railway; Supabase for Postgres.*
+5. **Portion Size Enhancements**
+   *Join `food_portion` table for grams conversion; expose in API.*
+6. **Monitoring & Backups**
+   *Enable WAL backups for Postgres; use `/_health` endpoints; Typesense snapshots.*
+
+---
+
+### 📌  Contact & Repo Links
+
+* **Backend repo (private):** `github.com/<your‑org>/nutrition-backend`
+* **Issue tracker:** use GitHub Projects board → *Backend Sprint 1*.
+* **Documentation owner:** Austin Profenius [austin@example.com](mailto:austin@example.com)
+
+---
+
+*Last updated:* 2025‑05‑16

@@ -1,0 +1,18 @@
+export const COLORS = {
+  primary: '#007AFF',
+  secondary: '#5856D6',
+  background: '#121212',
+  card: '#1E1E1E',
+  text: '#FFFFFF',
+  textSecondary: '#A9A9A9',
+  border: '#383838',
+  notification: '#FF453A',
+  success: '#32D74B',
+  warning: '#FFD60A',
+  error: '#FF453A',
+  white: '#FFFFFF',
+  cardLight: '#2C2C2C',
+  inputBackground: '#2A2A2A',
+  borderLight: '#444444',
+  chipBackground: '#2A2A2A',
+}; 

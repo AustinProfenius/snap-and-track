@@ -1,0 +1,12 @@
+{
+  "name": "FitnessTrackerRoot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "cd SnapAndTrackV3 && npm run start",
+    "android": "cd SnapAndTrackV3 && npm run android",
+    "ios": "cd SnapAndTrackV3 && npm run ios",
+    "web": "cd SnapAndTrackV3 && npm run web",
+    "reset": "rm -rf ~/.expo && xcrun simctl shutdown all || echo 'No simulators running' && cd SnapAndTrackV3 && npm run reset"
+  }
+} 
